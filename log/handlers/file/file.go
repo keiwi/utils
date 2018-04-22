@@ -3,70 +3,41 @@ package file
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
+	slog "log"
 	"sort"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/keiwi/utils/log"
 	"github.com/kyokomi/emoji"
 )
 
-type writer struct {
-	*sync.Mutex
-	format   string
-	folder   string
-	messages []string
-}
+var (
+	// FancyFormatter is the default formatter for fancy messages.
+	FileFormatter = log.MustStringFormatter(`[{{formatTime .Timestamp "2006-01-02 15:04:05"}}] [{{ .ShortFile }}] {{ .LevelIcon }} {{ .LevelTitle }}{{"\t"}}> {{ .Message }}{{ .ParsedFields }}`)
+)
 
-func (w *writer) log(message string) {
-	w.Lock()
-	w.messages = append(w.messages, message)
-	w.Unlock()
-
-	time.Sleep(time.Second * 1)
-	w.write()
-}
-
-func (w *writer) write() {
-	w.Lock()
-	if len(w.messages) < 0 {
-		w.Unlock()
-		return
+func NewFile(config *Config) *File {
+	w := writer{
+		Mutex:      new(sync.Mutex),
+		fileFormat: config.Filename,
+		folder:     config.Folder,
+		maxSize:    config.MaxSize,
+		maxLines:   config.MaxLines,
 	}
 
-	file := w.format
-	date := time.Now().Format("2006-01-02")
-	file = strings.Replace(file, "%date%", date, -1)
-	path := filepath.Join(w.folder, file)
-
-	f, err := w.open(path, os.O_APPEND|os.O_CREATE, os.ModePerm)
+	err := w.Init()
 	if err != nil {
-		w.Unlock()
-		panic(err.Error())
-		return
+		slog.Fatalf("Error when initializing file logger: %v", err.Error())
 	}
 
-	for _, e := range w.messages {
-		_, err = f.WriteString(e)
-		if err != nil {
-			f.Close()
-			w.Unlock()
-			panic(err.Error())
-			return
-		}
-	}
-	w.messages = []string{}
-
-	f.Close()
-	w.Unlock()
-	return
+	return &File{writer: w, Formatter: FileFormatter}
 }
 
-func (w *writer) open(file string, flag int, perm os.FileMode) (*os.File, error) {
-	return os.OpenFile(file, flag, perm)
+type Config struct {
+	Filename string
+	Folder   string
+	MaxSize  int64
+	MaxLines int64
 }
 
 var icons = map[log.Level]string{
@@ -89,16 +60,6 @@ type byName []field
 func (a byName) Len() int           { return len(a) }
 func (a byName) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a byName) Less(i, j int) bool { return a[i].Name < a[j].Name }
-
-func NewFile(folder string, format string) *File {
-	w := writer{new(sync.Mutex), format, folder, []string{}}
-	return &File{w, FileFormatter}
-}
-
-var (
-	// FancyFormatter is the default formatter for fancy messages.
-	FileFormatter = log.MustStringFormatter(`[{{formatTime .Timestamp "2006-01-02 15:04:05"}}] [{{ .ShortFile }}] {{ .LevelIcon }} {{ .LevelTitle }}{{"\t"}}> {{ .Message }}{{ .ParsedFields }}`)
-)
 
 type File struct {
 	writer    writer
@@ -126,7 +87,7 @@ func (c *File) Write(e *log.Entry, calldepth int) error {
 		return err
 	}
 
-	go c.writer.log(fmt.Sprintln(msg))
+	c.writer.Write([]byte(fmt.Sprintln(msg)))
 	return nil
 }
 
@@ -151,11 +112,6 @@ func parseEntry(e *log.Entry) string {
 
 	for _, v := range fields {
 		field := fmt.Sprintf("%s=%v", v.Name, v.Value)
-		if v.Name == "callstack" {
-			field = field
-		} else {
-			field = field
-		}
 		if len(fields) > 2 {
 			field = "\n\t" + field
 		} else {

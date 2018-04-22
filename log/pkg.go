@@ -3,7 +3,7 @@ package log
 import (
 	"sync"
 
-	"github.com/tryy3/joy/stdlib/strings"
+	"strings"
 )
 
 // singletons ftw?
